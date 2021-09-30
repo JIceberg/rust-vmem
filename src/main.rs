@@ -1,18 +1,18 @@
 mod mem;
 use mem::translation::Address;
-use mem::ptable::PageTable;
+use mem::ptable::{PageTable, PageTableEntry, Flag};
 
 extern crate rand;
 use rand::Rng;
 
 fn main() {
-    let mut directory: PageTable = [0; 1024];
-    let mut tables = [[0; 1024]; 1024];
+    let mut directory: PageTable = [PageTableEntry::from(0); 1024];
+    let mut tables = [[PageTableEntry::from(0); 1024]; 1024];
     let mut rng = rand::thread_rng();
     for i in 0..1024 {
-        directory[i] = (i << 12) as u32;
+        directory[i] = PageTableEntry::new(i as u32);
         for j in 0..1024 {
-            tables[i][j] = rng.gen::<u32>();
+            tables[i][j] = PageTableEntry::from(rng.gen::<u32>());
         }
     }
 

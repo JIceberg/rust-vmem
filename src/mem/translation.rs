@@ -13,17 +13,17 @@ impl Address {
                 let table_index = (vaddr >> 12) & 0x3FF;
                 let offset = vaddr & 0x3FF;
                 
-                let dir_ppn = (dir[dir_index as usize] >> 12) & 0xFFFFF;
+                let dir_ppn = dir[dir_index as usize].get_ppn();
                 let table = tables[dir_ppn as usize];
                 let entry: PTE = table[table_index as usize];
                 
-                let table_ppn = (entry >> 12) & 0xFFFFF;
+                let table_ppn = entry.get_ppn();
                 let paddr = (table_ppn << 12) | offset;
 
                 Self::Physical(paddr)
             }
             Self::Physical(paddr) => {
-                Address::Virtual(paddr)
+                Self::Virtual(paddr)
             }
         }
     }
