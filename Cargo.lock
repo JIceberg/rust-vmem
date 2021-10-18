@@ -70,10 +70,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "raw_pointer"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01398c4541b735327e4a2e8db79afe149b458615123ddca61a49d39221411dcc"
+
+[[package]]
 name = "rust-vmem"
 version = "0.1.0"
 dependencies = [
  "rand",
+ "raw_pointer",
 ]
 
 [[package]]
