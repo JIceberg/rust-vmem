@@ -23,9 +23,9 @@ fn main() {
     };
 
     // This is valid, because we registered
-    // ptr_x which creates a page of data
-    // when that page is allocated, all virtual addresses
-    // will properly map to said page.
+    // ptr_x which creates a page of data.
+    // When that page is allocated, all virtual addresses
+    // within the page boundary will properly map to said page.
     sim.register(ptr_y);    // will say "already registered"
     sim.write(ptr_y, ValueType::UnsignedInt(6));
     match sim.read(ptr_y) {

@@ -38,9 +38,9 @@ fn main() {
     };
 
     // This is valid, because we registered
-    // ptr_x which creates a page of data
-    // when that page is allocated, all virtual addresses
-    // will properly map to said page.
+    // ptr_x which creates a page of data.
+    // When that page is allocated, all virtual addresses
+    // within the page boundary will properly map to said page.
     sim.register(ptr_y);    // will say "already registered"
     sim.write(ptr_y, ValueType::UnsignedInt(6));
     match sim.read(ptr_y) {
@@ -82,6 +82,9 @@ This simulated virtual memory has the following features:
 * Lazy page allocation
 * Page swapping
 
+All of these features are handled by the simulated processes to enable page faults.
+This avoids needing a trapframe implementation.
+
 ### Copy-on-Write
 
 A child process and its parent initially point to the same physical pages to avoid
@@ -105,4 +108,13 @@ allocations to where we only allocate pages for a process when they begin using 
 ### Page Swapping
 There is a maximum amount of RAM that this simulation allocates for physical pages.
 When we run out of physical memory for the pages, some pages will be evicted such that
-their contents get written to a swap disk and then the page is freed.
+their contents get written to a swap disk and then the page is freed. Once it is freed, it gets
+put back into the free list for whatever process is running to make use of.
+
+This needs to consider pages that have been written to. The dirty flag on a page table entry
+tells the eviction program that the page needs to be written to the disk, as since it was last there
+it was modified. In the case that the dirty bit is clear, the page replacement algorithm will
+simply evict the page as its contents are already in the disk.
+
+Pages with the protected flag enabled cannot be evicted. This includes page directories, page tables,
+and the universal zero page.
