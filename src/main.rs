@@ -1,6 +1,6 @@
 mod mem;
 mod sim;
-use sim::check::{ValueType, Simulator};
+use sim::check::{ValueType, DataType, Simulator};
 use sim::pointer::Pointer;
 mod proc;
 
@@ -17,7 +17,7 @@ fn main() {
     sim.write(ptr_x, ValueType::UnsignedInt(5));
 
     // this should print 5
-    match sim.read(ptr_x) {
+    match sim.read(ptr_x, DataType::UnsignedInt) {
         Some(value) => println!("Value of x: {}", value.get_value()),
         None => {}
     };
@@ -28,12 +28,12 @@ fn main() {
     // within the page boundary will properly map to said page.
     sim.register(ptr_y);    // will say "already registered"
     sim.write(ptr_y, ValueType::UnsignedInt(6));
-    match sim.read(ptr_y) {
+    match sim.read(ptr_y, DataType::UnsignedInt) {
         Some(value) => println!("Value of y: {}", value.get_value()),
         None => {}
     };
 
-    for _ in 0..4096 {
+    for _ in 0..1024 {
         let mut z = ValueType::UnsignedInt(2);
         let _ = Pointer::new(&mut z);   // this is just to increment our simulated virtual address
     }
@@ -44,4 +44,6 @@ fn main() {
     // of the last allocated page, so we need to register this pointer
     // so we can allocate a new page
     sim.write(ptr_z, ValueType::SignedInt(-1));
+
+    sim.print();
 }
