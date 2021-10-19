@@ -59,7 +59,7 @@ impl Process {
 
         pte.set(pa.get_address(), flags);
         pte.set_flag(Flag::Present);
-        pgtab.write::<u32>(ptx, u32_to_raw(pte.get()).as_ref());
+        pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
     }
 
     fn walk(&self, vaddr: Virtual) -> Option<PTE> {
@@ -101,7 +101,7 @@ impl Process {
                         let ptx = va.get_table_index();
                         let pde = self.pgdir[pdx];
                         let pgtab = &mut self.tables[pde.get_ppn()];
-                        pgtab.write::<u32>(ptx, u32_to_raw(pte.get()).as_ref());
+                        pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
 
                         {
                             let pgnum = vaddr.get().translate().get_address() & !0xFFF;
