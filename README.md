@@ -15,6 +15,7 @@ to the user:
 | `write(addr, value)` | Writes `value` to the given virtual address `addr`. The address must be valid for the process. |
 | `read(addr)` | Returns the value stored at the given virtual address `addr`. The address must be valid for the process. |
 | `fork()` | Forks a child process from the current running process. Yields context to the child until it dies. |
+| `switch(n)` | Switches the process to the n-th running address. |
 | `kill()` | Kills the process. |
 
 An example implementation the user might do for creating variables is below,

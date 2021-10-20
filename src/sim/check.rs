@@ -13,7 +13,9 @@ impl Simulator {
     pub fn begin() -> Self {
         alloc::kinit();
         let mut v = Vec::<Process>::new();
-        v.push(Process::new(0));
+        let mut proc = Process::new(0);
+        proc.wake_up();
+        v.push(proc);
         Self {
             proc_list: v,
             curr_proc: 0
@@ -24,8 +26,7 @@ impl Simulator {
         if !self.check_valid(addr) {
             let va = Virtual::new(addr.vaddr(), addr.as_ptr() as usize);
             let pg = alloc::zero_page();
-            let pa = Physical::new(pg as *const Page as u32,
-                                   pg as *const Page as usize);
+            let pa = Physical::new(0, pg as *const Page as usize);
             self.proc_list[self.curr_proc].map(
                 va, pa,
                 &[Flag::User, Flag::Zero]
@@ -46,18 +47,39 @@ impl Simulator {
         proc.write(Virtual::new(addr.vaddr(), addr.as_ptr() as usize), value);
     }
 
-    pub fn read(&self, addr: Pointer<ValueType>, data_type: DataType) -> Option<ValueType> {
+    pub fn read<T>(&self, addr: Pointer<T>, data_type: DataType) -> Option<ValueType> {
         let proc = &self.proc_list[self.curr_proc];
         proc.read(Virtual::new(addr.vaddr(), addr.as_ptr() as usize), data_type)
     }
 
-    pub fn print(&self) {
-        self.proc_list[self.curr_proc].print_mem();
+    pub fn fork(&mut self) {
+        let size = self.proc_list.len() as u32;
+        let mut new_proc = self.proc_list[self.curr_proc].copy(size);
+        new_proc.wake_up();
+        self.curr_proc = new_proc.pid() as usize;
+        self.proc_list.push(new_proc);
     }
 
-    // pub fn fork(&self) {
+    pub fn kill(&mut self) {
+        self.proc_list[self.curr_proc].kill();
+        self.proc_list.remove(self.curr_proc);
+        if self.curr_proc > 0 {
+            self.curr_proc -= 1;
+            self.proc_list[self.curr_proc].wake_up();
+        }
+    }
 
-    // }
+    pub fn switch(&mut self, proc_num: usize) {
+        
+    }
+
+    pub fn print(&self) {
+        for proc in self.proc_list.iter() {
+            println!("PROCESS PID {}\n", proc.pid());
+            proc.print_mem();
+            println!();
+        }
+    }
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
