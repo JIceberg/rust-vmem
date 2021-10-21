@@ -224,10 +224,12 @@ impl Process {
 
                             // check ref count
                             if old_pg.ref_count() > 1 {
-                                // there are child processes still referencing this page
+                                // there are processes still referencing this page
                                 old_pg.decrement_refs();
                                 if let Some(pg) = alloc::kalloc() {
+                                    pg.copy(&*old_pg);
                                     drop(old_pg);
+                                    
                                     pte.set(PTE::new(pg.ppn()).get_address(), &[
                                         Flag::Present, Flag::Writable, Flag::User
                                     ]);
@@ -318,24 +320,6 @@ impl Process {
     }
 
     pub fn copy(&mut self, child_pid: u32) -> Self {
-        // copy pgdir
-        let pgdir = match alloc::kalloc() {
-            Some(dir) => dir,
-            None => panic!("Out of memory")
-        };
-        pgdir.copy(&*self.pgdir.borrow());
-
-        // copy tables
-        let mut tables: Vec<Rc<RefCell<Page>>> = Vec::new();
-        for table in self.tables.iter_mut() {
-            let page = match alloc::kalloc() {
-                Some(tb) => tb,
-                None => panic!("Out of memory")
-            };
-            page.copy(&*table.borrow());
-            tables.push(Rc::new(RefCell::new(*page)));
-        }
-
         let mut pages = HashMap::new();
         for (&key, page) in self.phys_pages.iter_mut() {
             let mut pg = page.borrow_mut();
@@ -369,9 +353,28 @@ impl Process {
                 pte.clear_flag(Flag::Writable);
                 pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
                 
-               pages.insert(va.get_address(), Rc::new(RefCell::new(*pg)));
+                pages.insert(va.get_address(), Rc::new(RefCell::new(*pg)));
             }
         }
+
+        // copy tables
+        let mut tables: Vec<Rc<RefCell<Page>>> = Vec::new();
+        for table in self.tables.iter_mut() {
+            let page = match alloc::kalloc() {
+                Some(tb) => tb,
+                None => panic!("Out of memory")
+            };
+            page.copy(&*table.borrow());
+            tables.push(Rc::new(RefCell::new(*page)));
+        }
+
+        // copy pgdir
+        let pgdir = match alloc::kalloc() {
+            Some(dir) => dir,
+            None => panic!("Out of memory")
+        };
+        pgdir.copy(&*self.pgdir.borrow());
+
         self.yieldk();
         Self {
             pid: child_pid,

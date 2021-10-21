@@ -160,6 +160,13 @@ impl Address {
         }
     }
 
+    pub fn get(&self) -> u32 {
+        match *self {
+            Self::Virtual(vaddr, _) => vaddr,
+            Self::Physical(paddr, _) => paddr,
+        }
+    }
+
     pub fn get_table_index(&self) -> usize {
         match *self {
             Self::Virtual(vaddr, _) => ((vaddr >> PTXSHIFT) & 0x3FF) as usize,
