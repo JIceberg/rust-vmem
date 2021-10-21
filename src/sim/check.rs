@@ -1,3 +1,5 @@
+#![allow(dead_code, unused)]
+
 use crate::mem::ptable::{Flag, Virtual, Physical};
 use crate::proc::proc::{Process};
 use crate::mem::alloc::{self, Page};
@@ -70,7 +72,9 @@ impl Simulator {
     }
 
     pub fn switch(&mut self, proc_num: usize) {
-        
+        self.proc_list[self.curr_proc].yieldk();
+        self.curr_proc = proc_num;
+        self.proc_list[self.curr_proc].wake_up();
     }
 
     pub fn print(&self) {

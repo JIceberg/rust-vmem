@@ -148,8 +148,8 @@ impl Address {
 
     pub fn get_address(&self) -> u32 {
         match *self {
-            Self::Virtual(vaddr, _) => vaddr,
-            Self::Physical(paddr, _) => paddr
+            Self::Virtual(vaddr, _) => vaddr & !0xFFF,
+            Self::Physical(paddr, _) => paddr & !0xFFF
         }
     }
 

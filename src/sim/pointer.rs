@@ -14,9 +14,11 @@ static mut VADDR: u32 = KERNBASE;
 impl<T> Pointer<T> {
     pub fn new(ptr: &mut T) -> Self {
         let vaddr = unsafe {
-            VADDR += 4;
             VADDR
         };
+        unsafe {
+            VADDR += std::mem::size_of::<T>() as u32;
+        }
         Self {
             vaddr,
             ptr: rptr::Pointer::new(ptr)
@@ -46,11 +48,14 @@ impl<T> Copy for Pointer<T> {}
 
 impl<T> From<usize> for Pointer<T> {
     fn from(item: usize) -> Self {
+        let vaddr = unsafe {
+            VADDR
+        };
+        unsafe {
+            VADDR += std::mem::size_of::<T>() as u32;
+        }
         Self {
-            vaddr: unsafe {
-                VADDR += 4;
-                VADDR
-            },
+            vaddr,
             ptr: rptr::Pointer::from(item)
         }
     }

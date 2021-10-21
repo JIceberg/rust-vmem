@@ -1,10 +1,10 @@
 use crate::mem::ptable::{PTE, Flag, Virtual, Physical, Address};
 use crate::mem::alloc::{self, Page};
 use crate::sim::check::{ValueType, DataType};
-use crate::sim::pointer::Pointer;
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::cell::{RefMut, RefCell};
 
 #[derive(PartialEq, Eq)]
 enum ProcessState {
@@ -16,25 +16,23 @@ enum ProcessState {
 pub struct Process {
     pid: u32,
     state: ProcessState,
-    pgdir: Page,
-    tables: Vec<Page>,
-    phys_pages: HashMap<u32, Page>,
-    page_refs: HashMap<u32, Rc<Page>>,
+    pgdir: Rc<RefCell<Page>>,
+    tables: Vec<Rc<RefCell<Page>>>,
+    phys_pages: HashMap<u32, Rc<RefCell<Page>>>,
 }
 
 impl Process {  
     pub fn new(pid: u32) -> Self {
         let pgdir = match alloc::kalloc() {
-            Some(dir) => unsafe { *dir },
+            Some(dir) => dir,
             None => panic!("Out of memory")
         };
         Self {
             pid: pid,
             state: ProcessState::Sleeping,
-            pgdir: pgdir,
+            pgdir: Rc::new(RefCell::new(*pgdir)),
             tables: Vec::new(),
             phys_pages: HashMap::new(),
-            page_refs: HashMap::new(),
         }
     }
 
@@ -53,30 +51,28 @@ impl Process {
     pub fn kill(&mut self) {
         self.state = ProcessState::Terminated;
 
-        // free all physical pages owned by the process
-        for page in &mut self.phys_pages.values_mut() {
+        // free all physical pages
+        for page_ref in self.phys_pages.values() {
+            let mut page: RefMut<_> = page_ref.borrow_mut();
+            if page.ref_count() == 0 {
+                continue;
+            }
             if page.ref_count() > 1 {
                 page.decrement_refs();
             } else {
-                alloc::kfree(page);
+                alloc::kfree(&*page);
             }
         }
-
-        // free all physical pages referenced by the process
-        for page_rc in &mut self.page_refs.values_mut() {
-            let page = Rc::make_mut(page_rc);
-            if page.ref_count() > 1 {
-                page.decrement_refs();
-            } else {
-                alloc::kfree(page);
-            }
-        }
+        self.phys_pages.clear();
 
         // free the directory
-        alloc::kfree(&mut self.pgdir);
-        for page in &mut self.tables {
-            alloc::kfree(page);
+        let pgdir_ref = self.pgdir.borrow();
+        alloc::kfree(&*pgdir_ref);
+        for page in &self.tables {
+            let page_ref = page.borrow();
+            alloc::kfree(&*page_ref);
         }
+        self.tables.clear();
     }
 
     pub fn mapped(&self, vaddr: Virtual) -> bool {
@@ -87,6 +83,8 @@ impl Process {
     }
 
     pub fn map(&mut self, vaddr: Virtual, paddr: Physical, flags: &[Flag]) {
+        let mut d = self.pgdir.borrow_mut();
+
         let va = vaddr.get();
         let pa = paddr.get();
 
@@ -94,7 +92,7 @@ impl Process {
         let pdx = va.get_dir_index();
         let ptx = va.get_table_index();
         
-        let raw_pd_data = self.pgdir.read::<u32>(pdx * 4);
+        let raw_pd_data = d.read::<u32>(pdx * 4);
         let mut pde = PTE::from(raw_to_u32(raw_pd_data));
         if !pde.get_flag(Flag::Present) {
             // allocate page
@@ -102,8 +100,8 @@ impl Process {
                 pde.set(PTE::new(self.tables.len() as u32).get_address(), &[
                     Flag::Present, Flag::Protected, Flag::Writable, Flag::User
                 ]);
-                self.pgdir.write::<u32>(pdx * 4, u32_to_raw(pde.get()).as_ref());
-                unsafe { self.tables.push(*pg); }
+                d.write::<u32>(pdx * 4, u32_to_raw(pde.get()).as_ref());
+                self.tables.push(Rc::new(RefCell::new(*pg)));
             } else {
                 // eventually replace with page replacement call,
                 // then panic only if that fails
@@ -111,7 +109,7 @@ impl Process {
             }
         }
 
-        let pgtab = &mut self.tables[pde.get_ppn()];
+        let mut pgtab = self.tables[pde.get_ppn()].borrow_mut();
         let raw_data = pgtab.read::<u32>(ptx);
         let mut pte = PTE::from(raw_to_u32(raw_data));
 
@@ -121,19 +119,21 @@ impl Process {
     }
 
     fn walk(&self, vaddr: Virtual) -> Option<PTE> {
+        let d = self.pgdir.borrow();
+
         let va = vaddr.get();
 
         // page walk
         let pdx = va.get_dir_index();
         let ptx = va.get_table_index();
         
-        let raw_pd_data = self.pgdir.read::<u32>(pdx * 4);
+        let raw_pd_data = d.read::<u32>(pdx * 4);
         let pde = PTE::from(raw_to_u32(raw_pd_data));
         if !pde.get_flag(Flag::Present) {
             return None;
         }
 
-        let pgtab = self.tables[pde.get_ppn()];
+        let pgtab = self.tables[pde.get_ppn()].borrow();
         
         let raw_data = pgtab.read::<u32>(ptx * 4);
         let pte = PTE::from(raw_to_u32(raw_data));
@@ -148,23 +148,22 @@ impl Process {
             println!("ZOMBIE {}", self.pid);
             return;
         }
+        let d = self.pgdir.borrow();
         match self.walk(vaddr) {
             Some(mut pte) => {
                 let va = vaddr.get();
                 if pte.get_flag(Flag::Zero) {
                     // lazy alloc
                     if let Some(pg) = alloc::kalloc() {
-                        let ptr_pg = Pointer::<Page>::from(pg as usize);
-                        let pg_vaddr = Address::Virtual(ptr_pg.vaddr(), pg as usize);
-                        pte.set(pg_vaddr.translate().get_address() & !0xFFF, &[
+                        pte.set(PTE::new(pg.ppn()).get_address(), &[
                             Flag::Present, Flag::Writable, Flag::User
                         ]);
 
                         let pdx = va.get_dir_index();
                         let ptx = va.get_table_index();
-                        let raw_pd_data = self.pgdir.read::<u32>(pdx * 4);
+                        let raw_pd_data = d.read::<u32>(pdx * 4);
                         let pde = PTE::from(raw_to_u32(raw_pd_data));
-                        let pgtab = &mut self.tables[pde.get_ppn()];
+                        let mut pgtab = self.tables[pde.get_ppn()].borrow_mut();
                         pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
 
                         {
@@ -172,7 +171,10 @@ impl Process {
                             println!("PGZERO: 0x{:x}", pgnum);
                         }
 
-                        self.phys_pages.insert(pte.get_address(), unsafe {*pg});
+                        self.phys_pages.insert(va.get_address(), Rc::new(RefCell::new(*pg)));
+
+                        drop(d);
+                        drop(pgtab);
 
                        self.write(vaddr, value);
                        return;
@@ -183,12 +185,13 @@ impl Process {
                     }
                 } else {
                     if pte.get_flag(Flag::Writable) {
-                        if let Some(page) = self.phys_pages.get_mut(&pte.get_address()) {
+                        if let Some(page) = self.phys_pages.get(&va.get_address()) {
+                            let mut page_ref = page.borrow_mut();
                             match value {
                                 ValueType::SignedInt(_) =>
-                                    page.write::<isize>(va.get_offset() as usize, value.as_bytes().as_ref()),
+                                    page_ref.write::<isize>(va.get_offset() as usize, value.as_bytes().as_ref()),
                                 ValueType::UnsignedInt(_) =>
-                                    page.write::<usize>(va.get_offset() as usize, value.as_bytes().as_ref()),
+                                    page_ref.write::<usize>(va.get_offset() as usize, value.as_bytes().as_ref()),
                             }
                         }
                     } else {
@@ -196,49 +199,58 @@ impl Process {
                         // we can assume this means that the page is a copy for CoW
 
                         // first, check if parent or child
-                        if let Some(_) = self.phys_pages.get(&pte.get_address()) {
-                            // it was the parent, make it writable and retry
-                            let pdx = va.get_dir_index();
-                            let ptx = va.get_table_index();
-                            let raw_pd_data = self.pgdir.read::<u32>(pdx * 4);
-                            let pde = PTE::from(raw_to_u32(raw_pd_data));
-                            let pgtab = &mut self.tables[pde.get_ppn()];
+                        if let Some(old_page) = self.phys_pages.get_mut(&va.get_address()) {
+                            // it was the parent
+                            let mut old_pg = old_page.borrow_mut();
 
-                            pte.set_flag(Flag::Writable);
-                            pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
-
-                            self.write(vaddr, value);
-                            return;
-                        }
-
-                        // it was the child, so allocate new page and remove old reference
-                        if let Some(old_page) = &mut self.page_refs.remove(&pte.get_address()) {
-                            Rc::make_mut(old_page).decrement_refs();
-                            if let Some(pg) = alloc::kalloc() {
-                                let ptr_pg = Pointer::<Page>::from(pg as usize);
-                                let pg_vaddr = Address::Virtual(ptr_pg.vaddr(), pg as usize);
-                                pte.set(pg_vaddr.translate().get_address(), &[
-                                    Flag::Present, Flag::Writable, Flag::User
-                                ]);
-        
+                            // check ref count
+                            if old_pg.ref_count() > 1 {
+                                // there are child processes still referencing this page
+                                old_pg.decrement_refs();
+                                if let Some(pg) = alloc::kalloc() {
+                                    drop(old_pg);
+                                    pte.set(PTE::new(pg.ppn()).get_address(), &[
+                                        Flag::Present, Flag::Writable, Flag::User
+                                    ]);
+            
+                                    let pdx = va.get_dir_index();
+                                    let ptx = va.get_table_index();
+                                    let raw_pd_data = d.read::<u32>(pdx * 4);
+                                    let pde = PTE::from(raw_to_u32(raw_pd_data));
+                                    {
+                                        let mut pgtab = self.tables[pde.get_ppn()].borrow_mut();
+                                        pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
+                                    }
+            
+                                    {
+                                        let pgnum = va.translate().get_address() & !0xFFF;
+                                        println!("PGCOPY: 0x{:x}", pgnum);
+                                    }
+            
+                                    self.phys_pages.insert(va.get_address(), Rc::new(RefCell::new(*pg)));
+                                    
+                                    drop(d);
+                                    self.write(vaddr, value);
+                                    return;
+                                }
+                            } else {
+                                // there are no other processes referencing this page,
+                                // so simply mark it as writable and retry
                                 let pdx = va.get_dir_index();
                                 let ptx = va.get_table_index();
-                                let raw_pd_data = self.pgdir.read::<u32>(pdx * 4);
+                                let raw_pd_data = d.read::<u32>(pdx * 4);
                                 let pde = PTE::from(raw_to_u32(raw_pd_data));
-                                let pgtab = &mut self.tables[pde.get_ppn()];
-                                pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
-        
                                 {
-                                    let pgnum = va.translate().get_address() & !0xFFF;
-                                    println!("PGCOPY: 0x{:x}", pgnum);
+                                    let mut pgtab = self.tables[pde.get_ppn()].borrow_mut();
+
+                                    pte.set_flag(Flag::Writable);
+                                    pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
                                 }
-        
-                                self.phys_pages.insert(pte.get_address(), unsafe {*pg});
-        
-                                self.write(vaddr, value);
                             }
-                        } else {
-                            // kill process
+                            drop(old_pg);
+                            drop(d);
+                            self.write(vaddr, value);
+                            return;
                         }
                     }
                 }
@@ -254,20 +266,11 @@ impl Process {
                 if pte.get_flag(Flag::Zero) {
                     return Some(ValueType::UnsignedInt(0));
                 }
-                let pg = match pte.get_flag(Flag::Writable) {
-                    true => self.phys_pages.get(&pte.get_address()),
-                    false => {
-                        match self.page_refs.get(&pte.get_address()) {
-                            Some(kref) => Some(kref.as_ref()),
-                            // below is the case where the child died before the parent
-                            None => self.phys_pages.get(&pte.get_address())
-                        }
-                    }
-                };
-                if let Some(page) = pg {
+                if let Some(page) = self.phys_pages.get(&va.get_address()) {
+                    let my_page = page.borrow();
                     let val = match data_type {
                         DataType::SignedInt => {
-                            let data = page.read::<isize>(va.get_offset() as usize);
+                            let data = my_page.read::<isize>(va.get_offset() as usize);
                             let mut num = 0;
                             let mut shif = 0;
                             for &byte in data {
@@ -277,7 +280,7 @@ impl Process {
                             ValueType::SignedInt(num as isize)
                         }
                         DataType::UnsignedInt => {
-                            let data = page.read::<usize>(va.get_offset() as usize);
+                            let data = my_page.read::<usize>(va.get_offset() as usize);
                             let mut num = 0;
                             let mut shif = 0;
                             for &byte in data {
@@ -296,56 +299,75 @@ impl Process {
     }
 
     pub fn copy(&mut self, child_pid: u32) -> Self {
-        let mut refs = self.page_refs.clone();
+        // copy pgdir
+        let pgdir = match alloc::kalloc() {
+            Some(dir) => dir,
+            None => panic!("Out of memory")
+        };
+        pgdir.copy(&*self.pgdir.borrow());
+
+        // copy tables
+        let mut tables: Vec<Rc<RefCell<Page>>> = Vec::new();
+        for table in self.tables.iter_mut() {
+            let page = match alloc::kalloc() {
+                Some(tb) => tb,
+                None => panic!("Out of memory")
+            };
+            page.copy(&*table.borrow());
+            tables.push(Rc::new(RefCell::new(*page)));
+        }
+
+        let mut pages = HashMap::new();
         for (&key, page) in self.phys_pages.iter_mut() {
-            let mut pte = PTE::from(key);
-            let va = Address::Physical(pte.get_address(), 0).translate();
+            let mut pg = page.borrow_mut();
+            let va = Address::Virtual(key, 0);
 
             // page walk to ensure proper mapping
             let pdx = va.get_dir_index();
             let ptx = va.get_table_index();
             
-            let raw_pd_data = self.pgdir.read::<u32>(pdx * 4);
+            let d = self.pgdir.borrow();
+            let raw_pd_data = d.read::<u32>(pdx * 4);
             let pde = PTE::from(raw_to_u32(raw_pd_data));
             if !pde.get_flag(Flag::Present) {
                 panic!("PTE does not exist");
             }
 
-            let pgtab = &mut self.tables[pde.get_ppn()];
+            let mut pgtab = self.tables[pde.get_ppn()].borrow_mut();
             let raw_data = pgtab.read::<u32>(ptx * 4);
-            pte = PTE::from(raw_to_u32(raw_data));
+            let mut pte = PTE::from(raw_to_u32(raw_data));
             if !pte.get_flag(Flag::Present) {
                 panic!("Page not present");
             }
 
             if pte.get_flag(Flag::Zero) {
-                
+                pages.insert(0, Rc::new(RefCell::new(*alloc::zero_page())));
             } else {
                 // increase ref count
-                page.increment_refs();
+                pg.increment_refs();
 
                 // no longer writable
                 pte.clear_flag(Flag::Writable);
                 pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
                 
-                refs.insert(pte.get_address(), Rc::from(*page));
+               pages.insert(va.get_address(), Rc::new(RefCell::new(*pg)));
             }
         }
         self.yieldk();
         Self {
             pid: child_pid,
             state: ProcessState::Sleeping,
-            pgdir: self.pgdir,
-            tables: self.tables.clone(),
-            phys_pages: HashMap::new(),
-            page_refs: refs.clone(),
+            pgdir: Rc::new(RefCell::new(*pgdir)),
+            tables,
+            phys_pages: pages,
         }
     }
 
     pub fn print_mem(&self) {
         println!("PAGE DIRECTORY\n");
         for i in 0..1024 {
-            let raw_pd_data = self.pgdir.read::<u32>(i * 4);
+            let d = self.pgdir.borrow();
+            let raw_pd_data = d.read::<u32>(i * 4);
             let entry = PTE::from(raw_to_u32(raw_pd_data));
             println!("PDE #{}\t PTN: {}, Flags: 0x{:x}", i, entry.get_ppn(), entry.get() & 0xFFF);
         }
@@ -353,23 +375,20 @@ impl Process {
         for i in 0..self.tables.len() {
             println!("PAGE TABLE #{}\n", i);
             for j in 0..1024 {
-                let entry = PTE::from(raw_to_u32(self.tables[i].read::<u32>(j * 4)));
+                let table = self.tables[i].borrow();
+                let entry = PTE::from(raw_to_u32(table.read::<u32>(j * 4)));
                 println!("PTE #{}\t PPN: {}, Flags: 0x{:x}", j, entry.get_ppn(), entry.get() & 0xFFF);
             }
             println!();
         }
         println!();
-        for (key, page) in self.phys_pages.iter() {
-            println!("PAGE #{}\n", key >> 12);
+        for (&pte, page) in self.phys_pages.iter() {
+            let pg = page.borrow();
+            println!("PAGE #{}\n", PTE::from(pte).get_ppn());
             for i in 0..1024 {
-                let word = raw_to_u32(page.read::<u32>(i * 4));
+                let word = raw_to_u32(pg.read::<u32>(i * 4));
                 println!("Word #{}: 0x{:x}", i, word);
             }
-            println!();
-        }
-        println!();
-        for key in self.page_refs.keys() {
-            println!("PAGE #{} (REFERENCED)\n", key >> 12);
             println!();
         }
     }

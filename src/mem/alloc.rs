@@ -8,6 +8,7 @@ static ZERO_PAGE: Page = Page {
 
 static mut MEM: Memory = Memory {
     free_list: Vec::new(),
+    used_list: Vec::new(),
     zero_page: &ZERO_PAGE
 };
 
@@ -52,10 +53,10 @@ impl Page {
         }
     }
 
+    pub fn ppn(&self) -> u32 { self.ppn }
+
     fn zero(&mut self) {
-        for i in 0..4096 {
-            self.write::<u8>(i, &[0]);
-        }
+        self.write::<[u8; 4096]>(0, &[0; 4096]);
     }
 
     pub fn ref_count(&self) -> usize {
@@ -69,10 +70,15 @@ impl Page {
     pub fn decrement_refs(&mut self) {
         self.ref_count -= 1
     }
+
+    pub fn copy(&mut self, other: &Page) {
+        self.write::<[u8; 4096]>(0, &other.data);
+    }
 }
 
 struct Memory {
     free_list: Vec<Page>,
+    used_list: Vec<Page>,
     zero_page: &'static Page,
 }
 
@@ -84,6 +90,7 @@ impl Memory {
         }
         Self {
             free_list: v,
+            used_list: Vec::new(),
             zero_page: &ZERO_PAGE,
         }   
     }
@@ -95,9 +102,30 @@ impl Memory {
         })
     }
 
-    fn push_free(&mut self, mut page: Page) {
-        page.zero();
+    fn push_free(&mut self, page: Page) {
         self.free_list.push(page);
+    }
+
+    fn push_used(&mut self, page: Page) {
+        self.used_list.push(page);
+    }
+
+    fn remove_used(&mut self, page: &Page) -> Option<Page> {
+        let mut idx = self.used_list.len();
+        for i in 0..self.used_list.len() {
+            if self.used_list[i].ppn == page.ppn {
+                idx = i;
+            }
+        }
+        if idx != self.used_list.len() {
+            return Some(self.used_list.remove(idx));
+        }
+        return None;
+    }
+
+    fn used_peek(&mut self) -> Option<&mut Page> {
+        let idx = self.used_list.len() - 1;
+        self.used_list.get_mut(idx)
     }
 
     fn get_zero_ref(&self) -> &Page {
@@ -111,24 +139,25 @@ pub fn kinit() {
     }
 }
 
-pub fn kalloc() -> Option<*mut Page> {
+pub fn kalloc() -> Option<&'static mut Page> {
     unsafe {
         match MEM.pop_free() {
             Some(mut page) => {
-                page.zero();
-                Some(&mut page as *mut Page)
+                page.increment_refs();
+                MEM.push_used(page);
+                MEM.used_peek()
             },
             None => None
         }
     }
 }
 
-pub fn kfree(page: &mut Page) {
+pub fn kfree(page: &Page) {
     if page.ppn == 0 {
         return;
     }
     unsafe {
-        MEM.push_free(*page);
+        MEM.push_free(MEM.remove_used(page).unwrap());
     }
 }
 
