@@ -63,3 +63,91 @@ simply evict the page as its contents are already in the disk.
 
 Pages with the protected flag enabled cannot be evicted. This includes page directories, page tables,
 and the universal zero page.
+
+## Context
+
+Each process has a _context_ that models its current state. From a user perspective, the program
+can switch between running processes seemlessly through the `switch(n)` simulation command.
+Below is an example of quick swapping between processes at the user's whim to write data to a shared
+value,
+
+```rust
+let mut sim = Simulator::begin();
+
+let mut x = ValueType::Zero;
+let ptr_x = Pointer::new(&mut x);
+
+sim.register(ptr_x);
+match sim.read(ptr_x, DataType::UnsignedInt) {
+    Some(value) => println!("Value of x: {}", value.get_value()),
+    None => {}
+};
+
+sim.fork();
+sim.fork();
+sim.fork();
+
+sim.switch(0);
+
+for i in 0..1024 {
+    match sim.read(ptr_x, DataType::UnsignedInt) {
+        Some(value) => println!("Value of x before write for pid {}: {}", i%4, value.get_value()),
+        None => {}
+    };
+    sim.write(ptr_x, ValueType::UnsignedInt(i));
+    match sim.read(ptr_x, DataType::UnsignedInt) {
+        Some(value) => println!("Value of x after write for pid {}: {}", i%4, value.get_value()),
+        None => {}
+    };
+    sim.switch((i+1)%4);
+}
+```
+
+The output will look something like this,
+```
+Value of x: 0
+Value of x before write for pid 0: 0
+PGZERO: 0x0
+Value of x after write for pid 0: 0
+Value of x before write for pid 1: 0
+PGZERO: 0x0
+Value of x after write for pid 1: 1
+Value of x before write for pid 2: 0
+PGZERO: 0x0
+Value of x after write for pid 2: 2
+Value of x before write for pid 3: 0
+PGZERO: 0x0
+Value of x after write for pid 3: 3
+Value of x before write for pid 0: 0
+Value of x after write for pid 0: 4
+Value of x before write for pid 1: 1
+Value of x after write for pid 1: 5
+Value of x before write for pid 2: 2
+Value of x after write for pid 2: 6
+...
+```
+
+Each process generates a page fault (PGZERO) on the initial write. 
+That's because they are all initially referencing the zero page for `x`, which is read-only.
+You can learn more about how the zero page is handled exactly in the [paging](paging) reference.
+
+It's important to note that each process is looking solely at its own state.
+PID 0 and 2 are looking at _different_ values for `x` despite it being the same virtual address!
+In a paging scheme, the virtual address gets translated into the page directory and
+the page tables for the current process. Each process has its own page directory and page tables.
+This is its context; the way the mapping between the virtual and physical address works becomes different.
+Now each process is no longer working with the same location in local memory.
+
+In this example, let's remark that PID 2 is using page 11 and that PID 0 is using page 9.
+These physical pages have different physical page numbers (PPN), so the page table
+that holds the entry referring to our virtual address for `x` is different.
+The page table entry contains the physical page number being referenced and some flags
+that aid in managing memory for things like page faults. When the virtual address is being
+looked up with respect to the current process's context, when we reach the page table entry,
+the final translation is different. The physical address is formed by taking the PPN
+from the PTE as the upper 20 bits and the offset from the virtual address as the lower 12.
+If the PPN is different, then it will refer to a different page number. A more detailed explanation
+as to how all these mappings work can be found in the [paging](paging) reference.
+
+If the user so wished it, they could create their own process scheduler just by using this basic
+simulation.

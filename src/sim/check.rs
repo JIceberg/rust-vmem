@@ -90,11 +90,12 @@ impl Simulator {
 pub enum ValueType {
     UnsignedInt(usize),
     SignedInt(isize),
+    Zero,
 }
 
 pub enum DataType {
     SignedInt,
-    UnsignedInt
+    UnsignedInt,
 }
 
 impl ValueType {
@@ -102,6 +103,7 @@ impl ValueType {
         match *self {
             Self::UnsignedInt(uint) => uint,
             Self::SignedInt(sint) => sint as usize,
+            Self::Zero => 0
         }
     }
 
@@ -129,6 +131,7 @@ impl ValueType {
 
                 v.into_boxed_slice()
             }
+            Self::Zero => Box::new([0])
         }
     }
 }

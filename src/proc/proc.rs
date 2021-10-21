@@ -98,7 +98,7 @@ impl Process {
             // allocate page
             if let Some(pg) = alloc::kalloc() {
                 pde.set(PTE::new(self.tables.len() as u32).get_address(), &[
-                    Flag::Present, Flag::Protected, Flag::Writable, Flag::User
+                    Flag::Present, Flag::Protected, Flag::Writable, Flag::Accessed
                 ]);
                 d.write::<u32>(pdx * 4, u32_to_raw(pde.get()).as_ref());
                 self.tables.push(Rc::new(RefCell::new(*pg)));
@@ -115,6 +115,7 @@ impl Process {
 
         pte.set(pa.get_address(), flags);
         pte.set_flag(Flag::Present);
+        pte.set_flag(Flag::Accessed);
         pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
     }
 
@@ -152,6 +153,10 @@ impl Process {
         match self.walk(vaddr) {
             Some(mut pte) => {
                 let va = vaddr.get();
+                if !pte.get_flag(Flag::User) {
+                    panic!("Attempt to write to kernel page in user process");
+                }
+                
                 if pte.get_flag(Flag::Zero) {
                     // lazy alloc
                     if let Some(pg) = alloc::kalloc() {
@@ -192,7 +197,21 @@ impl Process {
                                     page_ref.write::<isize>(va.get_offset() as usize, value.as_bytes().as_ref()),
                                 ValueType::UnsignedInt(_) =>
                                     page_ref.write::<usize>(va.get_offset() as usize, value.as_bytes().as_ref()),
+                                ValueType::Zero =>
+                                    page_ref.write::<usize>(va.get_offset() as usize, value.as_bytes().as_ref()),
                             }
+                            let pdx = va.get_dir_index();
+                            let ptx = va.get_table_index();
+                            let raw_pd_data = d.read::<u32>(pdx * 4);
+                            let pde = PTE::from(raw_to_u32(raw_pd_data));
+                            let mut pgtab = self.tables[pde.get_ppn()].borrow_mut();
+
+                            pte.set_flag(Flag::Dirty);
+                            pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
+
+                            drop(pgtab);
+                            drop(d);
+                            return;
                         }
                     } else {
                         // attempting to write to non-writable page
@@ -382,9 +401,9 @@ impl Process {
             println!();
         }
         println!();
-        for (&pte, page) in self.phys_pages.iter() {
+        for (_, page) in self.phys_pages.iter() {
             let pg = page.borrow();
-            println!("PAGE #{}\n", PTE::from(pte).get_ppn());
+            println!("PAGE #{}\n", pg.ppn());
             for i in 0..1024 {
                 let word = raw_to_u32(pg.read::<u32>(i * 4));
                 println!("Word #{}: 0x{:x}", i, word);
