@@ -19,10 +19,11 @@ pub struct Process {
     pgdir: Rc<RefCell<Page>>,
     tables: Vec<Rc<RefCell<Page>>>,
     phys_pages: HashMap<u32, Rc<RefCell<Page>>>,
+    debug: bool,
 }
 
 impl Process {  
-    pub fn new(pid: u32) -> Self {
+    pub fn new(pid: u32, debug: bool) -> Self {
         let pgdir = match alloc::kalloc() {
             Some(dir) => dir,
             None => panic!("Out of memory")
@@ -33,6 +34,7 @@ impl Process {
             pgdir: Rc::new(RefCell::new(*pgdir)),
             tables: Vec::new(),
             phys_pages: HashMap::new(),
+            debug,
         }
     }
 
@@ -171,7 +173,7 @@ impl Process {
                         let mut pgtab = self.tables[pde.get_ppn()].borrow_mut();
                         pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
 
-                        {
+                        if self.debug {
                             let pgnum = va.translate().get_address() & !0xFFF;
                             println!("PGZERO: 0x{:x}", pgnum);
                         }
@@ -215,11 +217,10 @@ impl Process {
                         }
                     } else {
                         // attempting to write to non-writable page
-                        // we can assume this means that the page is a copy for CoW
+                        // we can assume this means that the page is a copy or copied for CoW
 
-                        // first, check if parent or child
+                        // obtain the page
                         if let Some(old_page) = self.phys_pages.get_mut(&va.get_address()) {
-                            // it was the parent
                             let mut old_pg = old_page.borrow_mut();
 
                             // check ref count
@@ -243,7 +244,7 @@ impl Process {
                                         pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
                                     }
             
-                                    {
+                                    if self.debug {
                                         let pgnum = va.translate().get_address() & !0xFFF;
                                         println!("PGCOPY: 0x{:x}", pgnum);
                                     }
@@ -257,21 +258,22 @@ impl Process {
                             } else {
                                 // there are no other processes referencing this page,
                                 // so simply mark it as writable and retry
+                                drop(old_pg);
                                 let pdx = va.get_dir_index();
                                 let ptx = va.get_table_index();
                                 let raw_pd_data = d.read::<u32>(pdx * 4);
                                 let pde = PTE::from(raw_to_u32(raw_pd_data));
                                 {
+                                    drop(d);
                                     let mut pgtab = self.tables[pde.get_ppn()].borrow_mut();
 
                                     pte.set_flag(Flag::Writable);
+                                    pte.clear_flag(Flag::Dirty);
                                     pgtab.write::<u32>(ptx * 4, u32_to_raw(pte.get()).as_ref());
                                 }
+                                self.write(vaddr, value);
+                                return;
                             }
-                            drop(old_pg);
-                            drop(d);
-                            self.write(vaddr, value);
-                            return;
                         }
                     }
                 }
@@ -281,6 +283,10 @@ impl Process {
     }
 
     pub fn read(&self, vaddr: Virtual, data_type: DataType) -> Option<ValueType> {
+        if self.state != ProcessState::Running {
+            println!("ZOMBIE {}", self.pid);
+            return None;
+        }
         match self.walk(vaddr) {
             Some(pte) => {
                 let va = vaddr.get();
@@ -319,7 +325,7 @@ impl Process {
         None
     }
 
-    pub fn copy(&mut self, child_pid: u32) -> Self {
+    pub fn copy(&mut self, child_pid: u32, debug: bool) -> Self {
         let mut pages = HashMap::new();
         for (&key, page) in self.phys_pages.iter_mut() {
             let mut pg = page.borrow_mut();
@@ -382,36 +388,39 @@ impl Process {
             pgdir: Rc::new(RefCell::new(*pgdir)),
             tables,
             phys_pages: pages,
+            debug,
         }
     }
 
     pub fn print_mem(&self) {
-        println!("PAGE DIRECTORY\n");
-        for i in 0..1024 {
-            let d = self.pgdir.borrow();
-            let raw_pd_data = d.read::<u32>(i * 4);
-            let entry = PTE::from(raw_to_u32(raw_pd_data));
-            println!("PDE #{}\t PTN: {}, Flags: 0x{:x}", i, entry.get_ppn(), entry.get() & 0xFFF);
-        }
-        println!();
-        for i in 0..self.tables.len() {
-            println!("PAGE TABLE #{}\n", i);
-            for j in 0..1024 {
-                let table = self.tables[i].borrow();
-                let entry = PTE::from(raw_to_u32(table.read::<u32>(j * 4)));
-                println!("PTE #{}\t PPN: {}, Flags: 0x{:x}", j, entry.get_ppn(), entry.get() & 0xFFF);
-            }
-            println!();
-        }
-        println!();
-        for (_, page) in self.phys_pages.iter() {
-            let pg = page.borrow();
-            println!("PAGE #{}\n", pg.ppn());
+        if self.debug {
+            println!("PAGE DIRECTORY\n");
             for i in 0..1024 {
-                let word = raw_to_u32(pg.read::<u32>(i * 4));
-                println!("Word #{}: 0x{:x}", i, word);
+                let d = self.pgdir.borrow();
+                let raw_pd_data = d.read::<u32>(i * 4);
+                let entry = PTE::from(raw_to_u32(raw_pd_data));
+                println!("PDE #{}\t PTN: {}, Flags: 0x{:x}", i, entry.get_ppn(), entry.get() & 0xFFF);
             }
             println!();
+            for i in 0..self.tables.len() {
+                println!("PAGE TABLE #{}\n", i);
+                for j in 0..1024 {
+                    let table = self.tables[i].borrow();
+                    let entry = PTE::from(raw_to_u32(table.read::<u32>(j * 4)));
+                    println!("PTE #{}\t PPN: {}, Flags: 0x{:x}", j, entry.get_ppn(), entry.get() & 0xFFF);
+                }
+                println!();
+            }
+            println!();
+            for (_, page) in self.phys_pages.iter() {
+                let pg = page.borrow();
+                println!("PAGE #{}\n", pg.ppn());
+                for i in 0..1024 {
+                    let word = raw_to_u32(pg.read::<u32>(i * 4));
+                    println!("Word #{}: 0x{:x}", i, word);
+                }
+                println!();
+            }
         }
     }
 }

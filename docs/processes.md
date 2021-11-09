@@ -50,20 +50,6 @@ When a process attempts to write to a virtual address that is mapped to the zero
 a new page and remaps the virtual address to the new physical page. This saves on costly
 allocations to where we only allocate pages for a process when they begin using them.
 
-### Page Swapping
-There is a maximum amount of RAM that this simulation allocates for physical pages.
-When we run out of physical memory for the pages, some pages will be evicted such that
-their contents get written to a swap disk and then the page is freed. Once it is freed, it gets
-put back into the free list for whatever process is running to make use of.
-
-This needs to consider pages that have been written to. The dirty flag on a page table entry
-tells the eviction program that the page needs to be written to the disk, as since it was last there
-it was modified. In the case that the dirty bit is clear, the page replacement algorithm will
-simply evict the page as its contents are already in the disk.
-
-Pages with the protected flag enabled cannot be evicted. This includes page directories, page tables,
-and the universal zero page.
-
 ## Context
 
 Each process has a _context_ that models its current state. From a user perspective, the program
@@ -72,7 +58,7 @@ Below is an example of quick swapping between processes at the user's whim to wr
 value,
 
 ```rust
-let mut sim = Simulator::begin();
+let mut sim = Simulator::begin(true);
 
 let mut x = ValueType::Zero;
 let ptr_x = Pointer::new(&mut x);

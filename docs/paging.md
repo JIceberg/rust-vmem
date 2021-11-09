@@ -142,34 +142,37 @@ continue to handle it until it actually writes to the memory.
 
 ### Copy-on-Write
 
-A child process and its parent initially point to the same physical pages to avoid
-costly copying of all the data in the parent's pages to owned pages for the
-child. These pages are read-only. On a write from either the parent or the child to a page, the process that
-performed the write will copy the page and perform a remap. The new page will be write enabled
-but the old page will still be read-only. Grandchild and sibling process can also reference
-the same physical page.
+When we fork from a process, a new child process is constructed. We allocate
+pages for the new process's page directory and page tables and use them to make
+copies of the parent's. This is all done in the `copy` function.
+
+On a write to the process, we perform our typical checks. In the case that the page
+is not the zero page yet is not writable, it means our page has either been copied or is copied.
+It is not possible to know which, but we can know if it is currently being referenced by many or
+one processes. Our memory has metadata we associate with each `Page` type. Recall that a `Page`
+is a wrapper for a 4096-byte chunk of memory, but we also include metadata for the page in that
+struct type. This metadata keeps track of how many references the page has, which is useful
+for our copy-on-write implementation.
+In the case where there is only one process referencing the page, the handle is simple.
+What we do is mark the page as writable and then attempt the write again. This reattempt
+is a simulated version of the page fault yielding back to the process which then reattempts the write.
+
+The case where there _are_ multiple processes referencing this page is more complicated.
+What we're doing here is the actual copy on write--we've written to the page and so we need to change our mapping
+from the shared page to a newly allocated physical page. We copy the contents of the old
+page into this new page and then modify the corresponding page table entry so the mapping
+refers to the new page instead of the old shared referenced one. We then decrease the number
+of references to the old page by 1 because we are no longer referring to it in this
+process and reattempt the write.
 
 ### Zero-Initialized Data
 
 All data in physical memory is initialized to 0. All initially allocated pages prior to any
-write refer to a universal zero page in memory which cannot be evicted or modified.
+write refer to a universal zero page in memory which cannot be evicted or modified. On any attempt
+to write to the zero page, a new page is lazily allocated, which is discussed in the next section.
 
 ### Lazy Page Allocation
 
 When a process attempts to write to a virtual address that is mapped to the zero page, it allocates
 a new page and remaps the virtual address to the new physical page. This saves on costly
 allocations to where we only allocate pages for a process when they begin using them.
-
-### Page Swapping
-There is a maximum amount of RAM that this simulation allocates for physical pages.
-When we run out of physical memory for the pages, some pages will be evicted such that
-their contents get written to a swap disk and then the page is freed. Once it is freed, it gets
-put back into the free list for whatever process is running to make use of.
-
-This needs to consider pages that have been written to. The dirty flag on a page table entry
-tells the eviction program that the page needs to be written to the disk, as since it was last there
-it was modified. In the case that the dirty bit is clear, the page replacement algorithm will
-simply evict the page as its contents are already in the disk.
-
-Pages with the protected flag enabled cannot be evicted. This includes page directories, page tables,
-and the universal zero page.

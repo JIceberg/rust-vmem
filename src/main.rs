@@ -5,7 +5,7 @@ use sim::pointer::Pointer;
 mod proc;
 
 fn main() {
-    let mut sim = Simulator::begin();
+    let mut sim = Simulator::begin(true);
 
     let mut x = ValueType::Zero;
     let ptr_x = Pointer::new(&mut x);

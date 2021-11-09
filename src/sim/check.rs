@@ -9,18 +9,20 @@ use std::vec::Vec;
 pub struct Simulator {
     proc_list: Vec<Process>,
     curr_proc: usize,
+    debug: bool,
 }
 
 impl Simulator {
-    pub fn begin() -> Self {
+    pub fn begin(debug: bool) -> Self {
         alloc::kinit();
         let mut v = Vec::<Process>::new();
-        let mut proc = Process::new(0);
+        let mut proc = Process::new(0, debug);
         proc.wake_up();
         v.push(proc);
         Self {
             proc_list: v,
-            curr_proc: 0
+            curr_proc: 0,
+            debug,
         }
     }
 
@@ -56,7 +58,7 @@ impl Simulator {
 
     pub fn fork(&mut self) {
         let size = self.proc_list.len() as u32;
-        let mut new_proc = self.proc_list[self.curr_proc].copy(size);
+        let mut new_proc = self.proc_list[self.curr_proc].copy(size, self.debug);
         new_proc.wake_up();
         self.curr_proc = new_proc.pid() as usize;
         self.proc_list.push(new_proc);
@@ -78,10 +80,12 @@ impl Simulator {
     }
 
     pub fn print(&self) {
-        for proc in self.proc_list.iter() {
-            println!("PROCESS PID {}\n", proc.pid());
-            proc.print_mem();
-            println!();
+        if self.debug {
+            for proc in self.proc_list.iter() {
+                println!("PROCESS PID {}\n", proc.pid());
+                proc.print_mem();
+                println!();
+            }
         }
     }
 }

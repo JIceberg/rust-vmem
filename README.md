@@ -21,7 +21,7 @@ to the user:
 An example implementation the user might do for creating variables is below,
 ```rust
 fn main() {
-    let mut sim = Simulator::begin();
+    let mut sim = Simulator::begin(false);
 
     let mut x = ValueType::UnsignedInt(0);
     let mut y = ValueType::UnsignedInt(1);
@@ -81,7 +81,11 @@ This simulated virtual memory has the following features:
 * Copy-on-write
 * Zero-initialized data
 * Lazy page allocation
-* Page swapping
+
+Potential future features:
+
+* Caching
+* Page replacement
 
 All of these features are handled by the simulated processes to enable page faults.
 This avoids needing a trapframe implementation. You can read more about these
